@@ -171,6 +171,34 @@ export const PLAYER_SOURCES = [
       `https://www.vidking.net/embed/tv/${id}/${season}/${ep}`,
   },
   {
+    id: "vidcore",
+    label: "VidCore",
+    tag: null,
+    note: null,
+    supportsProgress: false,
+    colorParam: "color", // hex without # → e.g. "e50914"
+    langParam: null, // VidCore's "lang" param selects audio track, not subtitles
+    params: {},
+    movieUrl: (id) => `https://vidcore.org/embed/movie/${id}`,
+    tvUrl: (id, season, ep) =>
+      `https://vidcore.org/embed/tv/${id}/${season}/${ep}`,
+  },
+  {
+    id: "embedwave",
+    label: "EmbedWave",
+    tag: null,
+    note: null,
+    supportsProgress: false,
+    colorParam: null, // no color param documented
+    langParam: null, // no subtitle lang param documented
+    params: {
+      autoplay: "1",
+    },
+    movieUrl: (id) => `https://embedwave.cc/embed/movie/${id}`,
+    tvUrl: (id, season, ep) =>
+      `https://embedwave.cc/embed/tv/${id}/${season}/${ep}`,
+  },
+  {
     id: "allmanga",
     label: "AllManga",
     tag: "ANIME",
