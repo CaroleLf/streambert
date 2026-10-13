@@ -1,4 +1,6 @@
 // Keyboard Shortcuts reference modal
+import { openExternal } from "../utils/platform";
+
 export default function KeyboardShortcutsModal({ onClose }) {
   const shortcuts = [
     { keys: ["Ctrl", "F"], desc: "Open search" },
@@ -246,9 +248,7 @@ export default function KeyboardShortcutsModal({ onClose }) {
             href="https://github.com/truelockmc/streambert"
             onClick={(e) => {
               e.preventDefault();
-              window.electron?.openExternal(
-                "https://github.com/truelockmc/streambert",
-              );
+              openExternal("https://github.com/truelockmc/streambert");
             }}
             style={{
               display: "inline-flex",

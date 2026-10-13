@@ -18,7 +18,6 @@ import {
   PLAYER_SOURCES,
   getSourceUrl,
   sourceSupportsProgress,
-  sourceProgressViaFrames,
   sourceIsAsync,
   fetchAnilistData,
   fetchEpisodeGroup,
@@ -49,6 +48,7 @@ import {
 import DownloadModal from "../components/DownloadModal";
 import TrailerModal from "../components/TrailerModal";
 import BlockedStatsModal from "../components/BlockedStatsModal";
+import PlayerEmbed from "../components/PlayerEmbed";
 import { useBlockedStats } from "../utils/useBlockedStats";
 import {
   storage,
@@ -65,13 +65,8 @@ import {
   getAgeLimitSetting,
   getRatingCountry,
 } from "../utils/ageRating";
-import {
-  GAMEPAD_PLAYER_SCRIPT,
-  GAMEPAD_EXIT_CHECK_JS,
-  GAMEPAD_EXIT_RESET_JS,
-  GAMEPAD_CLEANUP_JS,
-} from "../utils/playerGamepadScript";
 import { setPlayerGamepadActive } from "../utils/gamepadPlayerState";
+import { openPipWindow, closePipWindow, onPipClosed } from "../utils/platform";
 
 // ── Partial-circle progress icon (cached per pct tier) ───────────────────────
 // Uses a single SVG arc. Three instances (25/50/75)
@@ -237,131 +232,6 @@ function EpisodeDesc({ overview, episodeName }) {
   );
 }
 
-// Injected into the webview DOM
-const INJECT_SKIP_CONTROLS = `
-(function() {
-  if (window.__skipControlsInjected) return;
-  var style = document.createElement('style');
-  style.innerHTML =
-    '*:focus, *:focus-visible {' +
-    'outline: none !important;' +
-    'box-shadow: none !important;' +
-    '}' +
-    'video:focus, video:focus-visible {' +
-    'outline: none !important;' +
-    'box-shadow: none !important;' +
-    '}';
-  document.head.appendChild(style);
-  window.__skipControlsInjected = true;
-
-  var BACK_SVG = '<svg viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2.2\" stroke-linecap=\"round\" stroke-linejoin=\"round\" style=\"width:26px;height:26px\"><polyline points=\"1 4 1 10 7 10\"/><path d=\"M3.51 15a9 9 0 1 0 .49-4.53\"/><text x=\"13.5\" y=\"15.5\" text-anchor=\"middle\" font-size=\"6.5\" fill=\"currentColor\" stroke=\"none\" font-weight=\"800\" font-family=\"system-ui,sans-serif\">15</text></svg>';
-  var FWD_SVG  = '<svg viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2.2\" stroke-linecap=\"round\" stroke-linejoin=\"round\" style=\"width:26px;height:26px\"><polyline points=\"23 4 23 10 17 10\"/><path d=\"M20.49 15a9 9 0 1 1-.49-4.53\"/><text x=\"10.5\" y=\"15.5\" text-anchor=\"middle\" font-size=\"6.5\" fill=\"currentColor\" stroke=\"none\" font-weight=\"800\" font-family=\"system-ui,sans-serif\">15</text></svg>';
-
-  var wrap = document.createElement('div');
-  wrap.id = '__skip-ui';
-  wrap.style.cssText = [
-    'position:fixed',
-    'top:0','left:0','right:0','bottom:0',
-    'pointer-events:none',
-    'z-index:2147483647',
-    'opacity:0',
-    'transition:opacity 0.25s ease',
-  ].join(';');
-
-  function makeBtn(seconds, svg, label, side) {
-    var btn = document.createElement('button');
-    btn.innerHTML = svg + '<span style="font-size:11px;font-family:system-ui,sans-serif">' + label + '</span>';
-    btn.setAttribute('tabindex', '-1');
-    btn.title = label;
-    btn.style.cssText = [
-      'pointer-events:auto',
-      'background:rgba(0,0,0,0.72)',
-      'border:1px solid rgba(255,255,255,0.18)',
-      'border-radius:8px',
-      'color:white',
-      'cursor:pointer',
-      'padding:10px 18px',
-      'display:flex',
-      'align-items:center',
-      'gap:7px',
-      'backdrop-filter:blur(6px)',
-      '-webkit-backdrop-filter:blur(6px)',
-      'transition:background 0.15s',
-      'font-size:12px',
-    ].join(';');
-    btn.style.position = 'absolute';
-    btn.style.top = '50%';
-    btn.style.transform = 'translateY(-50%)';
-
-    if (side === 'left') {
-      btn.style.left = '24px';
-    } else {
-      btn.style.right = '24px';
-    }
-    btn.onmouseenter = function() { btn.style.background = 'rgba(229,9,20,0.85)'; btn.style.borderColor = '#e5091466'; };
-    btn.onmouseleave = function() { btn.style.background = 'rgba(0,0,0,0.72)'; btn.style.borderColor = 'rgba(255,255,255,0.18)'; };
-    btn.onclick = function(e) {
-      e.stopPropagation();
-      var v = document.querySelector('video');
-      if (v) v.currentTime = Math.max(0, Math.min(v.duration || 0, v.currentTime + seconds));
-      show();
-    };
-    return btn;
-  }
-
-  wrap.appendChild(makeBtn(-15, BACK_SVG, '−15s', 'left'));
-  wrap.appendChild(makeBtn(15,  FWD_SVG,  '+15s', 'right'));
-  document.documentElement.appendChild(wrap);
-
-  var idleTimer;
-  function show() {
-    wrap.style.opacity = '1';
-    clearTimeout(idleTimer);
-    idleTimer = setTimeout(function() { wrap.style.opacity = '0'; }, 2500);
-  }
-  document.addEventListener('mousemove', show, true);
-  document.addEventListener('keydown', function(e) {
-    const active = document.activeElement;
-
-    // Keine Shortcuts wenn User tippt
-    if (
-      active &&
-      active.matches('input, textarea, [contenteditable="true"]')
-    ) {
-      return;
-    }
-
-    // Key repeat blockieren (wenn Taste gehalten wird)
-    if (e.repeat) return;
-
-    const v = document.querySelector('video');
-    if (!v) return;
-
-    // Throttle (max 1 Aktion alle 250ms)
-    const now = Date.now();
-    if (window.__skipKeyCooldown && now < window.__skipKeyCooldown) return;
-    window.__skipKeyCooldown = now + 250;
-
-    if (e.code === 'Space') {
-      e.preventDefault(); // verhindert Scrollen
-      if (v.paused) v.play();
-      else v.pause();
-      show();
-    }
-
-    if (e.key === 'ArrowLeft') {
-      v.currentTime = Math.max(0, v.currentTime - 10);
-      show();
-    }
-
-    if (e.key === 'ArrowRight') {
-      v.currentTime = Math.min(v.duration || 0, v.currentTime + 10);
-      show();
-    }
-  }, true);
-})();
-`;
-
 export default function TVPage({
   item,
   apiKey,
@@ -410,10 +280,6 @@ export default function TVPage({
     () => sourceSupportsProgress(playerSource),
     [playerSource],
   );
-  const progressViaFrames = useMemo(
-    () => sourceProgressViaFrames(playerSource),
-    [playerSource],
-  );
   const [dubMode, setDubMode] = useState(
     () => storage.get(STORAGE_KEYS.ALLMANGA_DUB_MODE) || "sub",
   );
@@ -434,7 +300,6 @@ export default function TVPage({
   const [playerFullscreen, setPlayerFullscreen] = useState(false);
   const [pipOpen, setPipOpen] = useState(false);
   const pipUrlRef = useRef(null);
-  const pipWebContentsIdRef = useRef(null); // cached WebContents ID of the pop-out window
   const [menuPos, setMenuPos] = useState(null);
   // AniSkip
   const [skipTimings, setSkipTimings] = useState(null); // { intro?, outro? }
@@ -729,6 +594,12 @@ export default function TVPage({
     if (!isAsync) return;
     // Use refs as guards
     if (resolvedPlayerUrlRef.current || resolvingUrlRef.current) return;
+    if (!window.electron) {
+      // AllManga scraping runs in the Electron main process (Node-only
+      // network access); there is no web-compatible equivalent.
+      setResolveError("AllManga is only available in the desktop app");
+      return;
+    }
     resolvingUrlRef.current = true;
     setResolvingUrl(true);
     setResolveError(null);
@@ -1156,42 +1027,11 @@ export default function TVPage({
     };
   }, []);
 
-  // Attach webview load events so we know when the new source has painted.
-  // Also poll for video duration so AniSkip markers appear without waiting for the 5s progress tick.
-  useEffect(() => {
-    if (!playing) return;
-    const wv = webviewRef.current;
-    if (!wv) return;
-    const done = () => setWebviewLoading(false);
-    wv.addEventListener("did-finish-load", done);
-    wv.addEventListener("did-fail-load", done);
-
-    // Poll up to 30s for video duration (metadata may load after buffering starts)
-    let attempts = 0;
-    const pollDuration = setInterval(async () => {
-      if (durationRef.current > 0 || attempts++ > 30) {
-        clearInterval(pollDuration);
-        return;
-      }
-      try {
-        const dur = await wv.executeJavaScript(
-          `(() => { const v = document.querySelector('video'); return (v && v.duration > 0 && isFinite(v.duration)) ? v.duration : null; })()`,
-        );
-        if (dur) {
-          durationRef.current = dur;
-          // let markers re-render
-          setSkipTimings((t) => (t ? { ...t } : t));
-          clearInterval(pollDuration);
-        }
-      } catch {}
-    }, 1000);
-
-    return () => {
-      wv.removeEventListener("did-finish-load", done);
-      wv.removeEventListener("did-fail-load", done);
-      clearInterval(pollDuration);
-    };
-  }, [playing, playerSource, item.id, selectedEp?.episode_number]);
+  // webview "did-finish-load"/"did-fail-load" are replaced by PlayerEmbed's
+  // standard iframe onLoad handler (see render below). The video-duration poll
+  // (for AniSkip markers) required webview.executeJavaScript on the embedded
+  // player's DOM, impossible for a cross-origin iframe — AniSkip only applies
+  // to the AllManga source anyway, which is unavailable in the web build.
 
   // ── AniSkip: fetch timings when episode changes ───────────────────────────
   useEffect(() => {
@@ -1249,222 +1089,26 @@ export default function TVPage({
     return () => wv.removeEventListener("before-input-event", handler);
   }, [skipPrompt, handleManualSkip]);
 
-  // Unified progress/skip timing tick for Allmanga and other sources.
-  // Skip detection runs every tick, progress is saved every 5th tick (5s).
-  useEffect(() => {
-    const aniSkipActive =
-      introSkipMode !== "off" && playing && !!skipTimings && isAsync;
+  // Progress tracking, auto-mark-watched, autoplay-next-episode trigger and
+  // AniSkip intro/outro detection all required polling the <video> element
+  // inside the embedded player via webview.executeJavaScript, which only
+  // works because Electron's webview runs the guest page in a renderer the
+  // host can script even cross-origin. A standard iframe cannot be read into
+  // from the parent page across origins, so none of this is possible in the
+  // web build (see PLAYER_SOURCES[].supportsProgress, now false everywhere).
+  // Manual progress ("Mark progress" buttons) and manually picking the next
+  // episode still work.
 
-    if (!aniSkipActive) setSkipPrompt(null);
-    if (!playing || !currentProgressKey) return;
-
-    const TICK = aniSkipActive ? 1000 : 5000;
-    let tickCount = 0;
-    let interval = null;
-
-    const timer = setTimeout(() => {
-      interval = setInterval(async () => {
-        try {
-          const wv = webviewRef.current;
-          if (!wv) return;
-
-          let result;
-          // When the pop-out window is open the main webview shows about:blank
-          // -> query the pip window's webContents directly.
-          if (
-            pipWebContentsIdRef.current != null &&
-            window.electron?.queryVideoProgress
-          ) {
-            result = await window.electron.queryVideoProgress(
-              pipWebContentsIdRef.current,
-            );
-          } else if (progressViaFrames && window.electron?.queryVideoProgress) {
-            result = await window.electron.queryVideoProgress(
-              wv.getWebContentsId(),
-            );
-          } else {
-            result = await wv.executeJavaScript(`
-              (() => {
-                const v = document.querySelector('video')
-                if (!v || !v.duration || v.duration === Infinity || v.paused) return null
-                // Re-attach seek tracker if video element was recreated (e.g. quality change)
-                if (!v._seekTracked) {
-                  v._seekTracked = true
-                  v.addEventListener('seeked', () => {
-                    v._lastUserSeek = Date.now()
-                    v._lastUserSeekTo = v.currentTime
-                  })
-                }
-                return {
-                  currentTime: v.currentTime,
-                  duration: v.duration,
-                  recentUserSeek: v._lastUserSeek ? (Date.now() - v._lastUserSeek < 6000) : false,
-                  lastUserSeekTo: v._lastUserSeekTo ?? null,
-                }
-              })()
-            `);
-          }
-
-          // ── AniSkip logic: runs every tick (only when aniSkipActive) ────
-          if (aniSkipActive && result?.currentTime != null) {
-            const ct = result.currentTime;
-            const { intro, outro } = skipTimings;
-            const inIntro =
-              intro && ct >= intro.startTime && ct < intro.endTime - 1;
-            const inOutro =
-              outro && ct >= outro.startTime && ct < outro.endTime - 1;
-            const activeSegment = inIntro ? "intro" : inOutro ? "outro" : null;
-            if (!activeSegment) {
-              setSkipPrompt(null);
-            } else if (introSkipMode === "auto") {
-              setSkipPrompt(null);
-              const endTime = Number(skipTimings[activeSegment].endTime);
-              if (Number.isFinite(endTime)) {
-                try {
-                  await wv.executeJavaScript(
-                    `(() => { const v = document.querySelector('video'); if (v) v.currentTime = ${endTime}; })()`,
-                  );
-                } catch {}
-              }
-            } else {
-              setSkipPrompt(activeSegment);
-            }
-          }
-
-          // ── Progress logic: every 5s regardless of tick rate ────────────
-          tickCount++;
-          if (aniSkipActive && tickCount % 5 !== 0) return;
-
-          if (result && result.duration > 0) {
-            durationRef.current = result.duration;
-            const ct = result.currentTime;
-
-            // ── Resolution-change reset detection ──────────────────────────
-            // Videasy resets to 0 on quality change. We only seek back if:
-            // - ct is near zero (≤5s)
-            // - we were well into the video (>30s)
-            // - the user did NOT manually seek in the last 6s
-            const now = Date.now();
-            if (
-              lastKnownTimeRef.current > 30 &&
-              ct <= 5 &&
-              !result.recentUserSeek
-            ) {
-              if (now > seekBackCooldownRef.current) {
-                // First reset: seek back and start cooldown
-                const seekTo = lastKnownTimeRef.current;
-                seekBackCooldownRef.current = now + 8000;
-                try {
-                  await wv.executeJavaScript(`
-                    (() => {
-                      const v = document.querySelector('video')
-                      if (v) v.currentTime = ${seekTo}
-                    })()
-                  `);
-                } catch {}
-              }
-              // In both cases (first reset or cooldown): skip progress save with wrong position
-              return;
-            }
-
-            // If user seeked, update ref to their chosen position immediately
-            if (result.recentUserSeek && result.lastUserSeekTo !== null) {
-              lastKnownTimeRef.current = result.lastUserSeekTo;
-            } else {
-              lastKnownTimeRef.current = ct;
-            }
-            const p = Math.floor((ct / result.duration) * 100);
-            saveProgressRef.current(currentProgressKey, Math.min(p, 100));
-            // Also persist actual seconds so DownloadsPage can show resume position
-            storage.set("dlTime_" + currentProgressKey, Math.floor(ct));
-
-            // Auto-mark watched when remaining time ≤ threshold
-            const remaining = result.duration - ct;
-            if (
-              !autoMarkedRef.current &&
-              remaining <= watchedThreshold &&
-              remaining >= 0
-            ) {
-              autoMarkedRef.current = true;
-              onMarkWatchedRef.current?.(currentProgressKey);
-            }
-
-            // Autoplay trigger
-            if (
-              remaining <= watchedThreshold &&
-              !localCountdownStartedRef.current
-            ) {
-              localCountdownStartedRef.current = true;
-              setCountdownStartedRef.current?.(true);
-              triggerAutoplayRef.current?.();
-            }
-          }
-        } catch {}
-      }, TICK);
-    }, 3000);
-
-    return () => {
-      clearTimeout(timer);
-      clearInterval(interval);
-      setSkipPrompt(null);
-    };
-  }, [
-    playing,
-    skipTimings,
-    playerSource,
-    introSkipMode,
-    currentProgressKey,
-    watchedThreshold,
-    progressViaFrames,
-  ]);
-
-  // Skip backward/forward by N seconds via webview JS injection
-  const seekBy = useCallback(async (seconds) => {
-    try {
-      const wv = webviewRef.current;
-      if (!wv) return;
-      await wv.executeJavaScript(`
-        (() => {
-          const v = document.querySelector('video');
-          if (v) v.currentTime = Math.max(0, Math.min(v.duration || 0, v.currentTime + ${seconds}));
-        })()
-      `);
-    } catch {}
-  }, []);
-
-  useEffect(() => {
-    const wv = webviewRef.current;
-    if (!wv || !playing || !isAsync) return;
-
-    const inject = () => {
-      wv.executeJavaScript(INJECT_SKIP_CONTROLS).catch(() => {});
-    };
-
-    wv.addEventListener("dom-ready", inject);
-
-    try {
-      inject();
-    } catch {}
-
-    return () => {
-      wv.removeEventListener("dom-ready", inject);
-      try {
-        wv.executeJavaScript(`
-          (() => {
-            const el = document.getElementById('__skip-ui');
-            if (el) el.remove();
-            window.__skipControlsInjected = false;
-          })()
-        `);
-      } catch {}
-    };
-  }, [playing, playerSource]);
+  // AniSkip's on-screen skip-controls overlay was injected directly into the
+  // embedded player's DOM via webview.executeJavaScript — impossible for a
+  // cross-origin iframe, and only relevant to the (now unavailable) AllManga
+  // source anyway.
 
   // ── Controller support: play/pause, seek, volume, fullscreen ─────────────
-  // Runs for any source (not just async ones) since it only needs a <video>
-  // element inside the webview. Also lets the app-wide gamepad navigation
-  // (App.jsx) know to stand down while a video is actually playing.
-  // Only active while the "controller support" setting is on.
+  // In-player gamepad control (B-button exit, injected script) required
+  // webview.executeJavaScript on the embedded player's own DOM. A cross-origin
+  // iframe cannot be scripted from the parent page, so this is unsupported
+  // in the web build — app-wide gamepad navigation (useGamepadNav) still works.
   const [gamepadEnabled, setGamepadEnabled] = useState(
     () => storage.get(STORAGE_KEYS.GAMEPAD_ENABLED) !== false, // default on
   );
@@ -1482,38 +1126,6 @@ export default function TVPage({
   useEffect(() => {
     setPlayerGamepadActive(gamepadEnabled && playing);
     return () => setPlayerGamepadActive(false);
-  }, [playing, gamepadEnabled]);
-
-  useEffect(() => {
-    const wv = webviewRef.current;
-    if (!wv || !playing || !gamepadEnabled) return;
-
-    const inject = () => {
-      wv.executeJavaScript(GAMEPAD_PLAYER_SCRIPT).catch(() => {});
-    };
-    wv.addEventListener("dom-ready", inject);
-    try {
-      inject();
-    } catch {}
-
-    // Poll for a B-button "leave the player" request from the guest script.
-    const exitPoll = setInterval(async () => {
-      try {
-        const requested = await wv.executeJavaScript(GAMEPAD_EXIT_CHECK_JS);
-        if (requested) {
-          wv.executeJavaScript(GAMEPAD_EXIT_RESET_JS).catch(() => {});
-          setPlaying(false);
-        }
-      } catch {}
-    }, 250);
-
-    return () => {
-      wv.removeEventListener("dom-ready", inject);
-      clearInterval(exitPoll);
-      try {
-        wv.executeJavaScript(GAMEPAD_CLEANUP_JS);
-      } catch {}
-    };
   }, [playing, gamepadEnabled]);
 
   const playEpisode = useCallback(
@@ -1602,23 +1214,13 @@ export default function TVPage({
     };
   }, [playing, playerSource]);
 
-  // ── PiP pop-out: navigate main webview away so only one stream is active ──
+  // ── PiP pop-out: open the player in a real browser window via window.open ──
   useEffect(() => {
     if (!playing) return;
-    const openH = window.electron?.onPipOpened?.(async () => {
-      setPipOpen(true);
-      pipWebContentsIdRef.current =
-        (await window.electron.getPipWebContentsId?.()) ?? null;
-    });
-    const closeH = window.electron?.onPipClosed?.(() => {
+    return onPipClosed(() => {
       pipUrlRef.current = null;
-      pipWebContentsIdRef.current = null;
       setPipOpen(false);
     });
-    return () => {
-      if (openH) window.electron?.offPipOpened?.(openH);
-      if (closeH) window.electron?.offPipClosed?.(closeH);
-    };
   }, [playing]);
 
   const effectiveYear =
@@ -1877,7 +1479,10 @@ export default function TVPage({
                     </span>
                     <button
                       className="player-overlay-btn"
-                      onClick={() => window.electron?.closePipWindow?.()}
+                      onClick={() => {
+                        closePipWindow();
+                        setPipOpen(false);
+                      }}
                       style={{ marginTop: 4 }}
                     >
                       Close pop-out &amp; return
@@ -2054,8 +1659,8 @@ export default function TVPage({
                     </div>
                   </div>
                 )}
-                <webview
-                  ref={webviewRef}
+                <PlayerEmbed
+                  embedRef={webviewRef}
                   src={
                     pipOpen
                       ? "about:blank"
@@ -2072,24 +1677,8 @@ export default function TVPage({
                             playerSubLang,
                           )
                   }
-                  partition="persist:player"
-                  allowpopups="false"
-                  sandbox="allow-scripts allow-same-origin allow-forms"
-                  style={{
-                    position: "absolute",
-                    inset: 0,
-                    width: "100%",
-                    height: "100%",
-                    border: "none",
-                    outline: "none",
-                    boxShadow: "none",
-                    background: "black",
-                    visibility:
-                      webviewLoading || (isAsync && !resolvedPlayerUrl)
-                        ? "hidden"
-                        : "visible",
-                  }}
-                  tabIndex={-1}
+                  hidden={webviewLoading || (isAsync && !resolvedPlayerUrl)}
+                  onLoad={() => setWebviewLoading(false)}
                 />
                 {/* Left-side overlay button group, flex row, no fixed px offsets */}
                 <div className="player-overlay-group">
@@ -2150,7 +1739,8 @@ export default function TVPage({
                     className="player-overlay-btn"
                     onClick={() => {
                       if (pipOpen) {
-                        window.electron?.closePipWindow?.();
+                        closePipWindow();
+                        setPipOpen(false);
                         return;
                       }
                       const url = isAsync
@@ -2167,10 +1757,7 @@ export default function TVPage({
                           );
                       if (!url) return;
                       pipUrlRef.current = url;
-                      window.electron?.openPipWindow?.(
-                        url,
-                        item.name ?? item.title,
-                      );
+                      if (openPipWindow(url)) setPipOpen(true);
                     }}
                     title={pipOpen ? "Close pop-out" : "Pop out player"}
                     disabled={

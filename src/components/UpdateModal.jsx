@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef } from "react";
+import { openExternal } from "../utils/platform";
 
 // ── Image component that proxies through Electron main process ────────────────
 // Fixes Codeberg (and other external) images being blocked by Electron's CSP.
@@ -107,7 +108,7 @@ function inlineFormat(text) {
             href={mm[2]}
             onClick={(e) => {
               e.preventDefault();
-              window.electron?.openExternal(mm[2]);
+              openExternal(mm[2]);
             }}
             style={{
               color: "var(--red)",
@@ -127,7 +128,7 @@ function inlineFormat(text) {
           href={`https://github.com/${username}`}
           onClick={(e) => {
             e.preventDefault();
-            window.electron?.openExternal(`https://github.com/${username}`);
+            openExternal(`https://github.com/${username}`);
           }}
           style={{
             color: "var(--red)",
@@ -154,7 +155,7 @@ function inlineFormat(text) {
           href={raw}
           onClick={(e) => {
             e.preventDefault();
-            window.electron?.openExternal(raw);
+            openExternal(raw);
           }}
           style={{
             color: "var(--red)",
@@ -605,7 +606,7 @@ export default function UpdateModal({
                   href={url}
                   onClick={(e) => {
                     e.preventDefault();
-                    window.electron?.openExternal(url);
+                    openExternal(url);
                   }}
                   style={{
                     color: "var(--red)",
@@ -724,7 +725,7 @@ export default function UpdateModal({
                 href={url}
                 onClick={(e) => {
                   e.preventDefault();
-                  window.electron?.openExternal(url);
+                  openExternal(url);
                 }}
                 style={{ color: "var(--red)", cursor: "pointer" }}
               >
@@ -792,7 +793,7 @@ export default function UpdateModal({
                   href={url}
                   onClick={(e) => {
                     e.preventDefault();
-                    window.electron?.openExternal(url);
+                    openExternal(url);
                   }}
                   style={{
                     color: "var(--red)",
@@ -824,7 +825,7 @@ export default function UpdateModal({
                   href={url}
                   onClick={(e) => {
                     e.preventDefault();
-                    window.electron?.openExternal(url);
+                    openExternal(url);
                   }}
                   style={{
                     display: "inline-flex",

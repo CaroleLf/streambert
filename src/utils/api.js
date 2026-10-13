@@ -128,7 +128,10 @@ export const PLAYER_SOURCES = [
     label: "Videasy",
     tag: null,
     note: null,
-    supportsProgress: true,
+    // Progress auto-tracking required Electron's privileged webview.executeJavaScript
+    // to read the <video> element inside the (cross-origin) embedded player.
+    // A plain iframe cannot reach into cross-origin content, so this is unsupported.
+    supportsProgress: false,
     colorParam: "color", // hex without # → e.g. "e50914"
     langParam: null, // no subtitle lang param
     params: {
@@ -143,7 +146,7 @@ export const PLAYER_SOURCES = [
     label: "VidSrc",
     tag: null,
     note: null,
-    supportsProgress: true,
+    supportsProgress: false,
     progressViaFrames: true, // video is in a nested iframe, needs main-process frame query
     colorParam: null, // vidsrc doesn't support color param
     langParam: "ds_lang", // ISO 639-1 language code
@@ -157,7 +160,7 @@ export const PLAYER_SOURCES = [
     label: "Vidking",
     tag: null,
     note: null,
-    supportsProgress: true,
+    supportsProgress: false,
     colorParam: "color", // hex without # → e.g. "e50914"
     langParam: null,
     params: {
@@ -172,7 +175,7 @@ export const PLAYER_SOURCES = [
     label: "AllManga",
     tag: "ANIME",
     note: null,
-    supportsProgress: true,
+    supportsProgress: false,
     async: true,
     params: {},
     movieUrl: (_id) => "https://allmanga.to",

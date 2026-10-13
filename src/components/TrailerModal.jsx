@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState, useCallback } from "react";
 import { CloseIcon, ExternalLinkIcon } from "./Icons";
 import { storage } from "../utils/storage";
+import { openExternal } from "../utils/platform";
 
 export const DEFAULT_INVIDIOUS_BASE = "https://inv.nadeko.net";
 
@@ -21,43 +22,6 @@ export function getInvidiousBase() {
     "",
   );
 }
-
-const DETECT_BOT_JS = `
-(function() {
-  var title = (document.title || '').toLowerCase()
-  var body  = (document.body  && document.body.innerText || '').toLowerCase()
-  var botKeywords = ['verifying', 'antibot', 'challenge', 'ddos', 'please wait', 'checking your browser', 'just a moment']
-  var isBot = botKeywords.some(function(k) { return title.includes(k) || body.includes(k) })
-  isBot
-})()
-`;
-
-// Hide the built-in Invidious button, detect video end
-const SETUP_JS = `
-(function() {
-  if (window.__trailerSetup) return
-  window.__trailerSetup = true
-
-  // Hide the "Watch on Invidious" button inside the player
-  var style = document.createElement('style')
-  style.textContent = '.player-container .invidious-link, a[href*="/watch"], .vjs-invidious-button { display: none !important; }'
-  document.head.appendChild(style)
-
-  // Detect video end and notify host
-  var attachEnded = function() {
-    var video = document.querySelector('video')
-    if (!video) return false
-    video.addEventListener('ended', function() {
-      window.__trailerEnded = true
-    })
-    return true
-  }
-  if (!attachEnded()) {
-    var obs = new MutationObserver(function() { if (attachEnded()) obs.disconnect() })
-    obs.observe(document.body, { childList: true, subtree: true })
-  }
-})()
-`;
 
 export default function TrailerModal({ trailerKey, title, onClose }) {
   const webviewRef = useRef(null);
@@ -104,59 +68,17 @@ export default function TrailerModal({ trailerKey, title, onClose }) {
   const openInBrowser = () => {
     const preferred = getInvidiousBase();
     const url = `${preferred}/watch?v=${trailerKey}`;
-    window.electron?.openExternal(url);
+    openExternal(url);
   };
 
-  useEffect(() => {
-    const wv = webviewRef.current;
-    if (!wv || !currentSrc) return;
-
-    const onLoad = () => {
-      wv.executeJavaScript(DETECT_BOT_JS)
-        .then((isBot) => {
-          if (isBot) {
-            tryNextInstance();
-          } else {
-            wv.executeJavaScript(SETUP_JS).catch(() => {});
-            setStatusMsg(null);
-          }
-        })
-        .catch(() => tryNextInstance());
-    };
-
-    const onFailLoad = () => {
-      tryNextInstance();
-    };
-
-    const onWillNavigate = (e) => {
-      const instanceBase = currentSrc.split("/embed/")[0];
-      if (!e.url.startsWith(instanceBase)) {
-        e.preventDefault();
-        window.electron?.openExternal(e.url);
-      }
-    };
-
-    const endedPoll = setInterval(() => {
-      wv.executeJavaScript("!!window.__trailerEnded")
-        .then((ended) => {
-          if (ended) {
-            clearInterval(endedPoll);
-            setTimeout(onClose, 1200);
-          }
-        })
-        .catch(() => {});
-    }, 800);
-
-    wv.addEventListener("did-finish-load", onLoad);
-    wv.addEventListener("did-fail-load", onFailLoad);
-    wv.addEventListener("will-navigate", onWillNavigate);
-    return () => {
-      clearInterval(endedPoll);
-      wv.removeEventListener("did-finish-load", onLoad);
-      wv.removeEventListener("did-fail-load", onFailLoad);
-      wv.removeEventListener("will-navigate", onWillNavigate);
-    };
-  }, [currentSrc, tryNextInstance, onClose]);
+  // Bot-challenge detection, button hiding and auto-close-on-end all required
+  // scripting the embedded page's DOM via webview.executeJavaScript, which
+  // only works because Electron's webview runs the guest page in a renderer
+  // the host can script even cross-origin. A standard iframe cannot be read
+  // into or scripted from the parent page across origins, so the iframe here
+  // just clears the loading spinner on load — if an instance shows a bot
+  // challenge the user can "Try another source" or "Open in Browser" below.
+  const handleIframeLoad = useCallback(() => setStatusMsg(null), []);
 
   return (
     <div className="trailer-overlay" onClick={onClose}>
@@ -166,6 +88,15 @@ export default function TrailerModal({ trailerKey, title, onClose }) {
             🎬 {title} — Official Trailer
           </span>
           <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+            {currentSrc && !failed && (
+              <button
+                onClick={tryNextInstance}
+                title="Try another Invidious instance"
+                className="trailer-openbrowser-btn"
+              >
+                Try another source
+              </button>
+            )}
             <button
               onClick={openInBrowser}
               title="Open in browser"
@@ -220,11 +151,13 @@ export default function TrailerModal({ trailerKey, title, onClose }) {
           )}
 
           {currentSrc && (
-            <webview
+            <iframe
               ref={webviewRef}
               src={currentSrc}
-              partition="persist:trailer"
-              allowpopups="false"
+              title="Trailer"
+              allow="autoplay; encrypted-media; picture-in-picture"
+              referrerPolicy="no-referrer-when-downgrade"
+              onLoad={handleIframeLoad}
               style={{
                 position: "absolute",
                 inset: 0,

@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef } from "react";
 import UpdateModal from "../components/UpdateModal";
+import { openExternal, APP_VERSION } from "../utils/platform";
 import {
   storage,
   STORAGE_KEYS,
@@ -540,7 +541,7 @@ function VersionSection() {
     return stored === null || stored === undefined ? true : !!stored;
   });
   const [autoSaved, setAutoSaved] = useState(false);
-  const [currentVersion, setCurrentVersion] = useState("0.0.0");
+  const [currentVersion, setCurrentVersion] = useState(APP_VERSION);
   const [updateSource, setUpdateSource] = useState(
     () => storage.get(STORAGE_KEYS.UPDATE_SOURCE) || DEFAULT_UPDATE_SOURCE,
   );
@@ -2005,7 +2006,7 @@ function SubtitleSettingsSection() {
             textDecoration: "underline",
           }}
           onClick={() =>
-            window.electron?.openExternal("https://subdl.com/settings")
+            openExternal("https://subdl.com/settings")
           }
         >
           SubDL API key
@@ -2115,7 +2116,7 @@ function SubtitleSettingsSection() {
                   cursor: "pointer",
                 }}
                 onClick={() =>
-                  window.electron?.openExternal(
+                  openExternal(
                     "https://codeberg.org/truelockmc/streambert/src/branch/main/wyzie-tutorial.md",
                   )
                 }
@@ -2161,7 +2162,7 @@ function SubtitleSettingsSection() {
                   className="btn btn-ghost"
                   style={{ padding: "6px 12px", fontSize: 12 }}
                   onClick={() =>
-                    window.electron?.openExternal(
+                    openExternal(
                       `https://store.wyzie.io/dashboard?key=${wyzieApiKey.trim()}`,
                     )
                   }
@@ -2186,7 +2187,7 @@ function SubtitleSettingsSection() {
                   fontSize: 11,
                 }}
                 onClick={() =>
-                  window.electron?.openExternal("https://subdl.com/settings")
+                  openExternal("https://subdl.com/settings")
                 }
               >
                 (free, register at subdl.com ↗)

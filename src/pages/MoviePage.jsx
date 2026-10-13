@@ -13,7 +13,6 @@ import {
   PLAYER_SOURCES,
   getSourceUrl,
   sourceSupportsProgress,
-  sourceProgressViaFrames,
   sourceIsAsync,
   fetchAnilistData,
   cleanAnilistDescription,
@@ -42,6 +41,7 @@ import {
 import DownloadModal from "../components/DownloadModal";
 import TrailerModal from "../components/TrailerModal";
 import BlockedStatsModal from "../components/BlockedStatsModal";
+import PlayerEmbed from "../components/PlayerEmbed";
 import { useBlockedStats } from "../utils/useBlockedStats";
 import MediaCard from "../components/MediaCard";
 import {
@@ -57,13 +57,8 @@ import {
   getAgeLimitSetting,
   getRatingCountry,
 } from "../utils/ageRating";
-import {
-  GAMEPAD_PLAYER_SCRIPT,
-  GAMEPAD_EXIT_CHECK_JS,
-  GAMEPAD_EXIT_RESET_JS,
-  GAMEPAD_CLEANUP_JS,
-} from "../utils/playerGamepadScript";
 import { setPlayerGamepadActive } from "../utils/gamepadPlayerState";
+import { openPipWindow, closePipWindow, onPipClosed } from "../utils/platform";
 
 export default function MoviePage({
   item,
@@ -99,10 +94,6 @@ export default function MoviePage({
   // so they are always fresh after Settings save without any extra storage reads.
   const playerAccentColor = playerSettings?.accentColor ?? null;
   const playerSubLang = playerSettings?.subtitleLang ?? null;
-  const progressViaFrames = useMemo(
-    () => sourceProgressViaFrames(playerSource),
-    [playerSource],
-  );
   const [showSourceMenu, setShowSourceMenu] = useState(false);
   const [dubMode, setDubMode] = useState(
     () => storage.get(STORAGE_KEYS.ALLMANGA_DUB_MODE) || "sub",
@@ -112,11 +103,6 @@ export default function MoviePage({
   const sourceRef = useRef(null);
   const playerWrapRef = useRef(null);
   const webviewRef = useRef(null);
-  // Always-current refs for interval callbacks, avoids stale closures without restarting the interval
-  const saveProgressRef = useRef(saveProgress);
-  saveProgressRef.current = saveProgress;
-  const onMarkWatchedRef = useRef(onMarkWatched);
-  onMarkWatchedRef.current = onMarkWatched;
   // AllManga async URL resolution
   const [resolvedPlayerUrl, setResolvedPlayerUrl] = useState(null);
   const [resolvingUrl, setResolvingUrl] = useState(false);
@@ -131,7 +117,6 @@ export default function MoviePage({
   // pipOpen=true: main webview shows about:blank, pop-out window has the real player
   const [pipOpen, setPipOpen] = useState(false);
   const pipUrlRef = useRef(null); // URL to restore when pop-out closes
-  const pipWebContentsIdRef = useRef(null); // cached WebContents ID of the pop-out window
 
   // Derived: detect anime before any effects so effects can use it
   const isAnime = useMemo(
@@ -194,18 +179,6 @@ export default function MoviePage({
             : null;
     return { watchedSecs, totalSecs, displayPct, progressLabel };
   }, [progressKey, pct, d?.runtime]);
-
-  // Read threshold from settings (default 20s), stable across renders
-  const [watchedThreshold] = useState(
-    () => storage.get("watchedThreshold") ?? 20,
-  );
-
-  // Ref to prevent double-marking
-  const autoMarkedRef = useRef(false);
-  // Tracks last known playback position, used to detect resolution-change resets
-  const lastKnownTimeRef = useRef(0);
-  // Timestamp until which we ignore reset detection (post-seekback cooldown)
-  const seekBackCooldownRef = useRef(0);
 
   useEffect(() => {
     let mounted = true;
@@ -340,6 +313,12 @@ export default function MoviePage({
     if (!sourceIsAsync(playerSource)) return;
     // Use refs as guards
     if (resolvedPlayerUrlRef.current || resolvingUrlRef.current) return;
+    if (!window.electron) {
+      // AllManga scraping runs in the Electron main process (Node-only
+      // network access); there is no web-compatible equivalent.
+      setResolveError("AllManga is only available in the desktop app");
+      return;
+    }
     resolvingUrlRef.current = true;
     setResolvingUrl(true);
     setResolveError(null);
@@ -449,13 +428,6 @@ export default function MoviePage({
     return () => window.electron.offSubtitleFound(handler);
   }, []);
 
-  // Reset auto-mark guard when a new movie loads or watched state resets
-  useEffect(() => {
-    autoMarkedRef.current = false;
-    lastKnownTimeRef.current = 0;
-    seekBackCooldownRef.current = 0;
-  }, [item.id, isWatched]);
-
   // Show loader instantly when play starts
   useEffect(() => {
     if (playing) setWebviewLoading(true);
@@ -503,158 +475,21 @@ export default function MoviePage({
     return () => setPlayerGamepadActive(false);
   }, [playing, gamepadEnabled]);
 
-  useEffect(() => {
-    const wv = webviewRef.current;
-    if (!wv || !playing || !gamepadEnabled) return;
+  // In-player gamepad control (B-button exit, injected script) required
+  // webview.executeJavaScript on the embedded player's own DOM. A cross-origin
+  // iframe cannot be scripted from the parent page, so this is unsupported
+  // in the web build — app-wide gamepad navigation (useGamepadNav) still works.
 
-    const inject = () => {
-      wv.executeJavaScript(GAMEPAD_PLAYER_SCRIPT).catch(() => {});
-    };
-    wv.addEventListener("dom-ready", inject);
-    try {
-      inject();
-    } catch {}
+  // webview "did-finish-load"/"did-fail-load" are replaced by PlayerEmbed's
+  // standard iframe onLoad handler (see render below).
 
-    // Poll for a B-button "leave the player" request from the guest script.
-    const exitPoll = setInterval(async () => {
-      try {
-        const requested = await wv.executeJavaScript(GAMEPAD_EXIT_CHECK_JS);
-        if (requested) {
-          wv.executeJavaScript(GAMEPAD_EXIT_RESET_JS).catch(() => {});
-          setPlaying(false);
-        }
-      } catch {}
-    }, 250);
-
-    return () => {
-      wv.removeEventListener("dom-ready", inject);
-      clearInterval(exitPoll);
-      try {
-        wv.executeJavaScript(GAMEPAD_CLEANUP_JS);
-      } catch {}
-    };
-  }, [playing, gamepadEnabled]);
-
-  // Attach webview load events so we know when the new source has painted
-  useEffect(() => {
-    if (!playing) return;
-    const wv = webviewRef.current;
-    if (!wv) return;
-    const done = () => setWebviewLoading(false);
-    wv.addEventListener("did-finish-load", done);
-    wv.addEventListener("did-fail-load", done);
-    return () => {
-      wv.removeEventListener("did-finish-load", done);
-      wv.removeEventListener("did-fail-load", done);
-    };
-  }, [playing, playerSource, item.id]);
-
-  // ── Auto-track progress + auto-watched every 5s ──────────────────────────
-  useEffect(() => {
-    if (!playing || !sourceSupportsProgress(playerSource)) return;
-    let interval = null;
-    const timer = setTimeout(() => {
-      interval = setInterval(async () => {
-        try {
-          const wv = webviewRef.current;
-          if (!wv) return;
-          let result;
-          // When the pop-out window is open the main webview shows about:blank
-          // -> query the pip window's webContents directly.
-          if (
-            pipWebContentsIdRef.current != null &&
-            window.electron?.queryVideoProgress
-          ) {
-            result = await window.electron.queryVideoProgress(
-              pipWebContentsIdRef.current,
-            );
-          } else if (progressViaFrames && window.electron?.queryVideoProgress) {
-            result = await window.electron.queryVideoProgress(
-              wv.getWebContentsId(),
-            );
-          } else {
-            result = await wv.executeJavaScript(`
-              (() => {
-                const v = document.querySelector('video')
-                if (!v || !v.duration || v.duration === Infinity || v.paused) return null
-                // Re-attach seek tracker if video element was recreated (e.g. quality change)
-                if (!v._seekTracked) {
-                  v._seekTracked = true
-                  v.addEventListener('seeked', () => {
-                    v._lastUserSeek = Date.now()
-                    v._lastUserSeekTo = v.currentTime
-                  })
-                }
-                return {
-                  currentTime: v.currentTime,
-                  duration: v.duration,
-                  recentUserSeek: v._lastUserSeek ? (Date.now() - v._lastUserSeek < 6000) : false,
-                  lastUserSeekTo: v._lastUserSeekTo ?? null,
-                }
-              })()
-            `);
-          }
-          if (result && result.duration > 0) {
-            const ct = result.currentTime;
-
-            // ── Resolution-change reset detection ──────────────────────────
-            // Videasy resets to 0 on quality change. We only seek back if:
-            // - ct is near zero (≤5s)
-            // - we were well into the video (>30s)
-            // - the user did NOT manually seek in the last 6s
-            const now = Date.now();
-            if (
-              lastKnownTimeRef.current > 30 &&
-              ct <= 5 &&
-              !result.recentUserSeek
-            ) {
-              if (now > seekBackCooldownRef.current) {
-                // First reset: seek back and start cooldown
-                const seekTo = lastKnownTimeRef.current;
-                seekBackCooldownRef.current = now + 8000;
-                try {
-                  await wv.executeJavaScript(`
-                    (() => {
-                      const v = document.querySelector('video')
-                      if (v) v.currentTime = ${seekTo}
-                    })()
-                  `);
-                } catch {}
-              }
-              // In both cases (first reset or cooldown): skip progress save with wrong position
-              return;
-            }
-
-            // If user seeked, update ref to their chosen position immediately
-            if (result.recentUserSeek && result.lastUserSeekTo !== null) {
-              lastKnownTimeRef.current = result.lastUserSeekTo;
-            } else {
-              lastKnownTimeRef.current = ct;
-            }
-            const p = Math.floor((ct / result.duration) * 100);
-            saveProgressRef.current(progressKey, Math.min(p, 100));
-            // Also persist actual seconds so DownloadsPage can show resume position
-            storage.set("dlTime_" + progressKey, Math.floor(ct));
-
-            // Auto-mark watched when remaining time ≤ threshold
-            const remaining = result.duration - ct;
-            if (
-              !autoMarkedRef.current &&
-              remaining <= watchedThreshold &&
-              remaining >= 0
-            ) {
-              autoMarkedRef.current = true;
-              onMarkWatchedRef.current?.(progressKey);
-            }
-          }
-        } catch {}
-      }, 5000);
-    }, 3000);
-    return () => {
-      clearTimeout(timer);
-      clearInterval(interval);
-    };
-  }, [playing, progressKey, watchedThreshold, playerSource, progressViaFrames]);
+  // Auto-track progress + auto-watched: required polling the <video> element
+  // inside the embedded player via webview.executeJavaScript, which only
+  // works because Electron's webview runs the guest page in a renderer the
+  // host can script even cross-origin. A standard iframe cannot be read into
+  // from the parent page across origins, so this isn't possible in the web
+  // build (see PLAYER_SOURCES[].supportsProgress, now false everywhere).
+  // Manual progress ("Mark progress: 25/50/75/100%" below) still works.
 
   const handlePlay = useCallback(() => {
     setM3u8Url(null);
@@ -685,23 +520,13 @@ export default function MoviePage({
     };
   }, [playing, playerSource]);
 
-  // ── PiP pop-out: navigate main webview away so only one stream is active ──
+  // ── PiP pop-out: open the player in a real browser window via window.open ──
   useEffect(() => {
     if (!playing) return;
-    const openH = window.electron?.onPipOpened?.(async () => {
-      setPipOpen(true);
-      pipWebContentsIdRef.current =
-        (await window.electron.getPipWebContentsId?.()) ?? null;
-    });
-    const closeH = window.electron?.onPipClosed?.(() => {
+    return onPipClosed(() => {
       pipUrlRef.current = null;
-      pipWebContentsIdRef.current = null;
       setPipOpen(false);
     });
-    return () => {
-      if (openH) window.electron?.offPipOpened?.(openH);
-      if (closeH) window.electron?.offPipClosed?.(closeH);
-    };
   }, [playing]);
 
   const handleSetDownloaderFolder = useCallback((folder) => {
@@ -1007,15 +832,18 @@ export default function MoviePage({
                 </span>
                 <button
                   className="player-overlay-btn"
-                  onClick={() => window.electron?.closePipWindow?.()}
+                  onClick={() => {
+                    closePipWindow();
+                    setPipOpen(false);
+                  }}
                   style={{ marginTop: 4 }}
                 >
                   Close pop-out &amp; return
                 </button>
               </div>
             )}
-            <webview
-              ref={webviewRef}
+            <PlayerEmbed
+              embedRef={webviewRef}
               src={
                 pipOpen
                   ? "about:blank"
@@ -1032,21 +860,11 @@ export default function MoviePage({
                         playerSubLang,
                       )
               }
-              partition="persist:player"
-              allowpopups="false"
-              sandbox="allow-scripts allow-same-origin allow-forms"
-              style={{
-                position: "absolute",
-                inset: 0,
-                width: "100%",
-                height: "100%",
-                border: "none",
-                visibility:
-                  webviewLoading ||
-                  (sourceIsAsync(playerSource) && !resolvedPlayerUrl)
-                    ? "hidden"
-                    : "visible",
-              }}
+              hidden={
+                webviewLoading ||
+                (sourceIsAsync(playerSource) && !resolvedPlayerUrl)
+              }
+              onLoad={() => setWebviewLoading(false)}
             />
             {/* Left-side overlay button group, flex row, no fixed px offsets */}
             <div className="player-overlay-group">
@@ -1105,7 +923,8 @@ export default function MoviePage({
                 className="player-overlay-btn"
                 onClick={() => {
                   if (pipOpen) {
-                    window.electron?.closePipWindow?.();
+                    closePipWindow();
+                    setPipOpen(false);
                     return;
                   }
                   const url = sourceIsAsync(playerSource)
@@ -1122,7 +941,7 @@ export default function MoviePage({
                       );
                   if (!url) return;
                   pipUrlRef.current = url;
-                  window.electron?.openPipWindow?.(url, item.title);
+                  if (openPipWindow(url)) setPipOpen(true);
                 }}
                 title={pipOpen ? "Close pop-out" : "Pop out player"}
                 disabled={
