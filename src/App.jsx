@@ -44,6 +44,7 @@ const MoviePage = lazy(() => import("./pages/MoviePage"));
 const TVPage = lazy(() => import("./pages/TVPage"));
 const LibraryPage = lazy(() => import("./pages/LibraryPage"));
 const SettingsPage = lazy(() => import("./pages/SettingsPage"));
+const DownloadsPage = lazy(() => import("./pages/DownloadsPage"));
 import {
   checkForUpdatesWithFallback,
   DEFAULT_UPDATE_SOURCE,
@@ -55,6 +56,7 @@ export default function App() {
   const [apiKeyLoaded, setApiKeyLoaded] = useState(false);
   const [skipped, setSkipped] = useState(false);
   const [apiKeyStatus, setApiKeyStatus] = useState("checking"); // 'checking' | 'ok' | 'invalid_token' | 'unreachable'
+  const [platform, setPlatform] = useState(null);
   const [page, setPage] = useState(() => {
     const start = storage.get("startPage") || "home";
     return start === "downloads" ? "home" : start;
@@ -313,7 +315,9 @@ export default function App() {
   }, [apiKeyLoaded]);
 
   // ── Downloads state ──────────────────────────────────────────────────────
-  const [downloads] = useState([]);
+  const [downloads, setDownloads] = useState([]);
+  const [highlightDownload, setHighlightDownload] = useState(null);
+  const [closeConfirm, setCloseConfirm] = useState(null);
 
   // ── Load API key from secure storage on startup ──
   useEffect(() => {
