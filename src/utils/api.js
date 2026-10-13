@@ -199,6 +199,20 @@ export const PLAYER_SOURCES = [
       `https://embedwave.cc/embed/tv/${id}/${season}/${ep}`,
   },
   {
+    id: "frembed",
+    label: "Frembed (VF/VOSTFR)",
+    tag: null,
+    note: "French audio/subs",
+    supportsProgress: false,
+    colorParam: null, // no color param documented
+    langParam: null, // no separate subtitle param; VF/VOSTFR is the content itself
+    params: {},
+    // NOTE: this domain moves often (piracy takedowns) — update here if it 404s.
+    movieUrl: (id) => `https://frembed.bar/embed/movie/${id}`,
+    tvUrl: (id, season, ep) =>
+      `https://frembed.bar/embed/serie/${id}?sa=${season}&epi=${ep}`,
+  },
+  {
     id: "allmanga",
     label: "AllManga",
     tag: "ANIME",
