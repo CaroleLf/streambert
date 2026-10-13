@@ -135,8 +135,8 @@ export const clearFailoverSource = (epKey) => {
 
 // ── Shared helpers ────────────────────────────────────────────────────────────
 
-/** True when running inside Electron (contextBridge exposed). */
-export const isElectron = typeof window !== "undefined" && !!window.electron;
+/** Desktop Electron runtime. Always false in the web app. */
+export const isElectron = false;
 
 /** Format a byte count into a human-readable string. */
 export function formatBytes(bytes) {
@@ -151,28 +151,29 @@ export function formatBytes(bytes) {
 }
 
 // ── Secure storage for sensitive keys ────────────────────────────────────────
-// Uses Electron safeStorage (OS keychain / DPAPI / libsecret).
-// All methods are async. Non-Electron environments silently fall back to no-op.
+// Web: stored in localStorage (same origin). Not OS-encrypted.
 //
-// Sensitive keys managed here (NOT stored in localStorage):
+// Sensitive keys managed here:
 //   "apikey"      - TMDB API key
 //   "subdlApiKey" - SubDL API key
 //   "wyzieApiKey" - Wyzie API key
 
-const _isElectronSecure =
-  typeof window !== "undefined" && !!window.electron?.secureGet;
+const SECURE_PREFIX = "streambert_secure_";
 
 export const secureStorage = {
-  /** Read an encrypted value. Returns null if not set. */
   async get(key) {
-    if (!_isElectronSecure) return null;
-    return window.electron.secureGet(key);
+    try {
+      return localStorage.getItem(SECURE_PREFIX + key);
+    } catch {
+      return null;
+    }
   },
 
-  /** Write an encrypted value. Pass null/empty to delete. */
   async set(key, value) {
-    if (!_isElectronSecure) return;
-    return window.electron.secureSet(key, value ?? "");
+    try {
+      if (!value) localStorage.removeItem(SECURE_PREFIX + key);
+      else localStorage.setItem(SECURE_PREFIX + key, value);
+    } catch {}
   },
 };
 
@@ -182,11 +183,6 @@ export const secureStorage = {
  * "Clear Cache" button and post-update cache clearing in App.jsx.
  */
 export async function clearAppCaches() {
-  if (isElectron) {
-    try {
-      await window.electron.clearAppCache();
-    } catch {}
-  }
   localStorage.removeItem("streambert_anilistCache");
   localStorage.removeItem("streambert_episodeGroupCache");
   localStorage.removeItem("streambert_aniskipCache");

@@ -3,6 +3,8 @@
 //
 // Supports multiple release sources (GitHub + Codeberg).
 
+import { APP_VERSION } from "./platform";
+
 export const GITHUB_REPO = "truelockmc/streambert";
 export const CODEBERG_REPO = "truelockmc/streambert";
 
@@ -44,12 +46,8 @@ export function semverGt(a, b) {
   return false;
 }
 
-// Fetch current app version fresh each time, avoids race condition
 async function getCurrentVersion() {
-  if (typeof window !== "undefined" && window.electron?.getAppVersion) {
-    return window.electron.getAppVersion();
-  }
-  return "0.0.0";
+  return APP_VERSION;
 }
 
 /**

@@ -450,7 +450,7 @@ export const isAnimeContent = (item, details) => {
 };
 
 // Default sources
-export const ANIME_DEFAULT_SOURCE = "allmanga";
+export const ANIME_DEFAULT_SOURCE = "videasy";
 export const NON_ANIME_DEFAULT_SOURCE = "vidking";
 
 // ── Episode Group fetch (localStorage + in-memory cache, 7-day TTL) ─────────

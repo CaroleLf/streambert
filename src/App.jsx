@@ -9,8 +9,12 @@ import {
 } from "react";
 import ErrorBoundary from "./components/ErrorBoundary";
 import KeyboardShortcutsModal from "./components/KeyboardShortcutsModal";
-import WindowTitlebar from "./components/WindowTitlebar";
 import { storage, secureStorage, STORAGE_KEYS } from "./utils/storage";
+import {
+  APP_VERSION,
+  applyZoomFactor,
+  showNotification,
+} from "./utils/platform";
 import {
   applyAccentColor,
   applyTheme,
@@ -40,7 +44,6 @@ const MoviePage = lazy(() => import("./pages/MoviePage"));
 const TVPage = lazy(() => import("./pages/TVPage"));
 const LibraryPage = lazy(() => import("./pages/LibraryPage"));
 const SettingsPage = lazy(() => import("./pages/SettingsPage"));
-const DownloadsPage = lazy(() => import("./pages/DownloadsPage"));
 import {
   checkForUpdatesWithFallback,
   DEFAULT_UPDATE_SOURCE,
@@ -52,7 +55,10 @@ export default function App() {
   const [apiKeyLoaded, setApiKeyLoaded] = useState(false);
   const [skipped, setSkipped] = useState(false);
   const [apiKeyStatus, setApiKeyStatus] = useState("checking"); // 'checking' | 'ok' | 'invalid_token' | 'unreachable'
-  const [page, setPage] = useState(() => storage.get("startPage") || "home");
+  const [page, setPage] = useState(() => {
+    const start = storage.get("startPage") || "home";
+    return start === "downloads" ? "home" : start;
+  });
   const [selected, setSelected] = useState(null);
   const [showSearch, setShowSearch] = useState(false);
   const [dlSearchOpen, setDlSearchOpen] = useState(false);
@@ -60,7 +66,6 @@ export default function App() {
     () => storage.get(STORAGE_KEYS.LIBRARY_SORT) || "manual",
   );
   const [showShortcuts, setShowShortcuts] = useState(false);
-  const [platform, setPlatform] = useState(null);
 
   // Navigation history stack for Ctrl+Z back navigation
   const [navStack, setNavStack] = useState([]);
@@ -109,34 +114,13 @@ export default function App() {
   const [watchingEpisode, setWatchingEpisode] = useState(null);
   const watchStartRef = useRef(null);
 
-  // ── Scheduled backup: run on startup if due ─────────────────────────────────
-  useEffect(() => {
-    if (!window.electron?.onScheduledBackupRequested) return;
-    const handler = window.electron.onScheduledBackupRequested(async () => {
-      try {
-        const settings = await window.electron.getScheduledBackupSettings();
-        if (!settings?.enabled || !settings?.path) return;
-        const data = collectBackupData();
-        await window.electron.performScheduledBackup({ data, settings });
-      } catch {
-        // silently ignore errors on scheduled backup
-      }
-    });
-    return () => window.electron.offScheduledBackupRequested(handler);
-  }, []);
-
   // ── Post-update cache flush ───────────────────────────────────────────────
-  // On every start, compare the running version against the last-seen version.
-  // If they differ the app was just updated -> clear all caches to prevent problems
   useEffect(() => {
-    if (!window.electron?.getAppVersion) return;
-    window.electron.getAppVersion().then((version) => {
-      const lastVersion = localStorage.getItem("streambert_lastVersion");
-      if (lastVersion && lastVersion !== version) {
-        clearAppCaches();
-      }
-      localStorage.setItem("streambert_lastVersion", version);
-    });
+    const lastVersion = localStorage.getItem("streambert_lastVersion");
+    if (lastVersion && lastVersion !== APP_VERSION) {
+      clearAppCaches();
+    }
+    localStorage.setItem("streambert_lastVersion", APP_VERSION);
   }, []);
 
   // ── Startup update check ─────────────────────────────────────────────────
@@ -305,21 +289,18 @@ export default function App() {
       // Show in-app result card
       setEpisodeCheckStatus({ entries: newEpisodeEntries });
 
-      // Also fire OS notification
-      if (window.electron?.showNotification) {
-        const names = newEpisodeEntries.map((e) => e.title);
-        const body =
-          names.length === 1
-            ? `${names[0]} has a new episode.`
-            : `${names.slice(0, 3).join(", ")}${
-                names.length > 3 ? ` and ${names.length - 3} more` : ""
-              } have new episodes.`;
-        window.electron.showNotification({
-          title: "New episodes available",
-          body,
-          silent: false,
-        });
-      }
+      const names = newEpisodeEntries.map((e) => e.title);
+      const body =
+        names.length === 1
+          ? `${names[0]} has a new episode.`
+          : `${names.slice(0, 3).join(", ")}${
+              names.length > 3 ? ` and ${names.length - 3} more` : ""
+            } have new episodes.`;
+      showNotification({
+        title: "New episodes available",
+        body,
+        silent: false,
+      });
     }
 
     checkNewEpisodes().catch(() => {
@@ -332,9 +313,7 @@ export default function App() {
   }, [apiKeyLoaded]);
 
   // ── Downloads state ──────────────────────────────────────────────────────
-  const [downloads, setDownloads] = useState([]);
-  const [highlightDownload, setHighlightDownload] = useState(null);
-  const [closeConfirm, setCloseConfirm] = useState(null); // { count }
+  const [downloads] = useState([]);
 
   // ── Load API key from secure storage on startup ──
   useEffect(() => {
