@@ -199,6 +199,32 @@ export const PLAYER_SOURCES = [
       `https://embedwave.cc/embed/tv/${id}/${season}/${ep}`,
   },
   {
+    id: "superembed",
+    label: "SuperEmbed",
+    tag: null,
+    note: null,
+    supportsProgress: false,
+    colorParam: null, // no color param documented
+    langParam: null, // only a full subtitle-file-URL param, not a lang code
+    params: { tmdb: "1" },
+    movieUrl: (id) => `https://multiembed.mov/?video_id=${id}`,
+    tvUrl: (id, season, ep) =>
+      `https://multiembed.mov/?video_id=${id}&s=${season}&e=${ep}`,
+  },
+  {
+    id: "cinesrc",
+    label: "CineSrc",
+    tag: null,
+    note: null,
+    supportsProgress: false,
+    colorParam: "color", // hex without # → e.g. "e50914"
+    langParam: null, // no subtitle lang param documented
+    params: {},
+    movieUrl: (id) => `https://cinesrc.st/embed/movie/${id}`,
+    tvUrl: (id, season, ep) =>
+      `https://cinesrc.st/embed/tv/${id}?s=${season}&e=${ep}`,
+  },
+  {
     id: "frembed",
     label: "Frembed (VF/VOSTFR)",
     tag: null,
